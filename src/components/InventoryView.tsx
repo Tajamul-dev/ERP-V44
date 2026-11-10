@@ -18,6 +18,7 @@ import {
 } from 'lucide-react';
 import { SoundEngine } from '../utils/audio';
 import { fmtStr } from '../utils/calculations';
+import { OfficialStockStatusSheet } from './OfficialStockStatusSheet';
 
 interface InventoryViewProps {
   inventory: InventoryItem[];
@@ -25,6 +26,7 @@ interface InventoryViewProps {
   onSaveInventory: (items: InventoryItem[]) => void;
   onRefresh?: () => void;
   onOpenScanBill: () => void;
+  onNotify?: (msg: string) => void;
 }
 
 export const InventoryView: React.FC<InventoryViewProps> = ({
@@ -32,7 +34,9 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
   masterSkus,
   onSaveInventory,
   onOpenScanBill,
+  onNotify,
 }) => {
+  const [inventoryTab, setInventoryTab] = useState<'sheet' | 'packaging'>('sheet');
   const [searchTerm, setSearchTerm] = useState('');
   const [categoryFilter, setCategoryFilter] = useState('');
   const [materialFilter, setMaterialFilter] = useState('');
@@ -260,10 +264,60 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
 
   return (
     <div className="space-y-4">
-      {/* 4 Summary Cards */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-        <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-4 shadow-xs">
-          <div className="text-[10px] font-black uppercase text-slate-500 tracking-wider">Total Items</div>
+      {/* Primary Tab Switcher */}
+      <div className="flex flex-wrap items-center justify-between gap-3 p-2.5 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-xs no-print">
+        <div className="flex items-center gap-1.5 bg-slate-100 dark:bg-slate-800 p-1 rounded-xl">
+          <button
+            type="button"
+            onClick={() => {
+              setInventoryTab('sheet');
+              SoundEngine.play('pop');
+            }}
+            className={`px-4 py-2 rounded-lg font-bold text-xs flex items-center gap-2 transition-all cursor-pointer ${
+              inventoryTab === 'sheet'
+                ? 'bg-amber-500 text-slate-950 shadow-sm'
+                : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100'
+            }`}
+          >
+            <span>📋 Official Stock Status (Warehouse Format)</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setInventoryTab('packaging');
+              SoundEngine.play('pop');
+            }}
+            className={`px-4 py-2 rounded-lg font-bold text-xs flex items-center gap-2 transition-all cursor-pointer ${
+              inventoryTab === 'packaging'
+                ? 'bg-amber-500 text-slate-950 shadow-sm'
+                : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100'
+            }`}
+          >
+            <Package className="w-4 h-4" />
+            <span>Packaging &amp; Raw Components ({totalItems})</span>
+          </button>
+        </div>
+
+        <button
+          type="button"
+          onClick={onOpenScanBill}
+          className="px-3.5 py-2 rounded-xl bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white font-bold text-xs flex items-center gap-1.5 shadow-xs cursor-pointer"
+        >
+          <Camera className="w-4 h-4" />
+          <span>Scan Vendor Bill / PO</span>
+        </button>
+      </div>
+
+      {inventoryTab === 'sheet' && (
+        <OfficialStockStatusSheet onNotify={onNotify} />
+      )}
+
+      {inventoryTab === 'packaging' && (
+        <>
+          {/* 4 Summary Cards */}
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+            <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-4 shadow-xs">
+              <div className="text-[10px] font-black uppercase text-slate-500 tracking-wider">Total Items</div>
           <div className="text-2xl font-black font-mono tabular-nums text-slate-900 dark:text-slate-100 mt-1">
             {totalItems}
           </div>
@@ -733,6 +787,8 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
             </form>
           </div>
         </div>
+      )}
+        </>
       )}
     </div>
   );

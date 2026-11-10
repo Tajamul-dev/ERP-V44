@@ -113,8 +113,11 @@ export const MobileSignatureModal: React.FC<MobileSignatureModalProps> = ({
     setIsDrawing(false);
   };
 
+  const [validationError, setValidationError] = useState<string | null>(null);
+
   const handleClear = () => {
     SoundEngine.play('thud');
+    setValidationError(null);
     const canvas = canvasRef.current;
     if (!canvas) return;
     const ctx = canvas.getContext('2d');
@@ -125,9 +128,10 @@ export const MobileSignatureModal: React.FC<MobileSignatureModalProps> = ({
 
   const handleAdoptSignature = () => {
     if (!canvasRef.current || !hasDrawn) {
-      alert('Please draw your signature on the pad before confirming.');
+      setValidationError('Please draw your signature on the pad before confirming.');
       return;
     }
+    setValidationError(null);
 
     SoundEngine.play('success');
     const dataUrl = canvasRef.current.toDataURL('image/png');
@@ -328,6 +332,11 @@ export const MobileSignatureModal: React.FC<MobileSignatureModalProps> = ({
                   Authorized Signatory
                 </span>
               </div>
+              {validationError && (
+                <div className="text-xs text-rose-500 font-bold bg-rose-50 dark:bg-rose-950/40 p-2 rounded-lg border border-rose-200 dark:border-rose-900">
+                  ⚠️ {validationError}
+                </div>
+              )}
             </div>
 
             {/* Quick Actions */}

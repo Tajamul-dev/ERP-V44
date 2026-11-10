@@ -214,9 +214,9 @@ export function calculateMasterRow(
     ? fmt((pkg.customReciprocalDutyUSD as number) * curMult)
     : autoTrumpDutyQuoteCur;
 
-  // Option 1: Primary Basic Customs Duty (%, ¢/kg, or $/kg)
+  // Option 1: Primary Basic Customs Duty (%, ¢/kg, or $/kg) - Only applicable if destination is USA
   let autoPrimaryBasicDutyQuoteCur = 0;
-  if (!isUsaDirectPricelist) {
+  if (!isUsaDirectPricelist && params.isUSA) {
     if (params.dutyType === 'cents/kg') {
       const dutyINR = (params.basicDuty / 100) * netWeightKg * safeExUSD;
       autoPrimaryBasicDutyQuoteCur = fmt(dutyINR / Math.max(0.0001, params.activeExRate));
@@ -236,11 +236,11 @@ export function calculateMasterRow(
     ? fmt((pkg.customBasicDuty1USD as number) * curMult)
     : autoPrimaryBasicDutyQuoteCur;
 
-  // Option 2: Second Basic Customs Duty — Per Kg ($/kg or ¢/kg)
+  // Option 2: Second Basic Customs Duty — Per Kg ($/kg or ¢/kg) - Only applicable if destination is USA
   const rawPerKgDuty = Number(params.basicDutyPerKg) || 0;
   const perKgUnit = params.basicDutyPerKgUnit || '$/kg';
   let autoBasicDutyPerKgQuoteCur = 0;
-  if (!isUsaDirectPricelist && rawPerKgDuty > 0) {
+  if (!isUsaDirectPricelist && params.isUSA && rawPerKgDuty > 0) {
     const perKgUSD = perKgUnit === 'cents/kg' ? rawPerKgDuty / 100 : rawPerKgDuty;
     const perKgINR = perKgUSD * netWeightKg * safeExUSD;
     autoBasicDutyPerKgQuoteCur = fmt(perKgINR / Math.max(0.0001, params.activeExRate));
@@ -256,7 +256,7 @@ export function calculateMasterRow(
 
   const basicDutyQuoteCur = fmt(primaryBasicDutyQuoteCur + basicDutyPerKgQuoteCur);
 
-  const autoOtherCustomEntryFeeQuoteCur = isUsaDirectPricelist
+  const autoOtherCustomEntryFeeQuoteCur = isUsaDirectPricelist || !params.isUSA
     ? 0
     : fmt(netFobPriceQuoteCur * params.entryFeePercent);
   const isCustomEntryFee =

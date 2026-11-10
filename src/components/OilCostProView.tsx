@@ -6,6 +6,7 @@ import {
   ProformaItem,
   ProformaExtraRow,
   SavedProformaInvoice,
+  DigitalSignatureData,
   NegotiationRecord,
   User,
   Commodity,
@@ -73,6 +74,14 @@ import {
   PanelRightClose,
   PanelRightOpen,
   ShieldAlert,
+  TrendingUp,
+  Percent,
+  Smartphone,
+  QrCode,
+  Globe,
+  MapPin,
+  CheckCircle2,
+  ShieldCheck,
 } from 'lucide-react';
 import { SoundEngine } from '../utils/audio';
 
@@ -295,6 +304,7 @@ export const OilCostProView: React.FC<OilCostProViewProps> = ({
       density: 0.91,
       incoterm: 'DDP',
       isUSA: true,
+      deliveryCountry: 'USA',
       roundingStep: 0.5,
       portName: 'Port of New York / Newark, USA',
       containerSize: '40HQ',
@@ -476,6 +486,7 @@ export const OilCostProView: React.FC<OilCostProViewProps> = ({
   const [paymentTerms, setPaymentTerms] = useState('30% advance & Balance 70% against Delivery');
   const [extraSummaryRows, setExtraSummaryRows] = useState<ProformaExtraRow[]>([]);
   const [piInternalNote, setPiInternalNote] = useState('');
+  const [piSignature, setPiSignature] = useState<DigitalSignatureData | undefined>(undefined);
   const [showSellerSettings, setShowSellerSettings] = useState(false);
   const [showLiveTemplatePreview, setShowLiveTemplatePreview] = useState(true);
   const [liveTemplateInlineEdit, setLiveTemplateInlineEdit] = useState(false);
@@ -537,20 +548,62 @@ export const OilCostProView: React.FC<OilCostProViewProps> = ({
 
   const activeCommObj = commodities[activeCommodity] || Object.values(commodities)[0] || COMMODITIES_CONFIG.mustard;
 
+  const [customCountryName, setCustomCountryName] = useState('');
+
+  // Handle Target Delivery Country Selection (USA vs Non-USA Duty Policy)
+  const handleSelectDeliveryCountry = (country: string) => {
+    SoundEngine.play('pop');
+    const isUS = country === 'USA';
+    let targetPort = params.portName;
+
+    // Smart destination port assignment based on country
+    if (isUS && !params.isUSA) {
+      targetPort = ports['US_NY']?.name || 'Port of New York / Newark, USA';
+    } else if (country === 'Canada') {
+      targetPort = ports['CA_MTR']?.name || 'Port of Montreal, Canada';
+    } else if (country === 'Guyana') {
+      targetPort = ports['GY_GEO']?.name || 'Georgetown, Guyana';
+    } else if (country === 'Italy') {
+      targetPort = ports['IT_GEN']?.name || 'Port of Genoa, Italy';
+    } else if (country === 'United Kingdom' || country === 'United Arab Emirates' || country === 'Australia') {
+      targetPort = `${country} Main Port / CIF Terminal`;
+    }
+
+    updateParams(prev => ({
+      ...prev,
+      deliveryCountry: country,
+      isUSA: isUS,
+      portName: targetPort,
+      // If non-US country, all duties are strictly 0. If US, restore US duties.
+      reciprocalDuty: isUS ? (prev.reciprocalDuty || 10.0) : 0,
+      basicDuty: isUS ? (activeCommObj?.basicDuty || 0) : 0,
+      basicDutyPerKg: isUS ? (activeCommObj?.basicDutyPerKg || 0) : 0,
+      entryFeePercent: isUS ? 0.004715 : 0,
+    }));
+
+    onNotify(
+      isUS
+        ? 'Delivery country set to USA. US Customs duties & reciprocal tariffs are active.'
+        : `Delivery country set to ${country}. No import duties applicable (0% duty applied).`
+    );
+  };
+
   // Handle Port Change
   const handlePortChange = (portKey: string) => {
     SoundEngine.play('tick');
     const port = ports[portKey] || Object.values(ports)[0] || PORT_PROFILES.US_NY;
+    const isUS = port.isUS;
     updateParams(prev => ({
       ...prev,
       portName: port.name,
       oceanFreight: port.oceanFreight,
       inlandDrayage: port.drayage,
-      isUSA: port.isUS,
-      reciprocalDuty: port.isUS ? prev.reciprocalDuty || 10.0 : 0,
-      basicDuty: port.isUS ? activeCommObj?.basicDuty || 0 : 0,
+      isUSA: isUS,
+      deliveryCountry: isUS ? 'USA' : (prev.deliveryCountry === 'USA' ? 'Canada' : prev.deliveryCountry),
+      reciprocalDuty: isUS ? prev.reciprocalDuty || 10.0 : 0,
+      basicDuty: isUS ? activeCommObj?.basicDuty || 0 : 0,
       dutyType: activeCommObj?.dutyType || '%',
-      basicDutyPerKg: port.isUS ? activeCommObj?.basicDutyPerKg || 0 : 0,
+      basicDutyPerKg: isUS ? activeCommObj?.basicDutyPerKg || 0 : 0,
       basicDutyPerKgUnit: activeCommObj?.basicDutyPerKgUnit || '$/kg',
     }));
   };
@@ -940,6 +993,7 @@ export const OilCostProView: React.FC<OilCostProViewProps> = ({
       showStamp: poSellerConfig.showStamp,
       customLogoUrl: poSellerConfig.customLogoUrl,
       internalNote: piInternalNote,
+      signatureAttachment: piSignature,
     };
   }, [
     invNum,
@@ -965,6 +1019,7 @@ export const OilCostProView: React.FC<OilCostProViewProps> = ({
     extraSummaryRows,
     invoiceTotals,
     piInternalNote,
+    piSignature,
   ]);
 
   // Sync edits made directly inside the live ProformaTemplateDocument preview back to form states
@@ -994,6 +1049,9 @@ export const OilCostProView: React.FC<OilCostProViewProps> = ({
     }
     setInvoiceItems(updated.items);
     if (updated.extraSummaryRows) setExtraSummaryRows(updated.extraSummaryRows);
+    if (updated.signatureAttachment !== undefined) {
+      setPiSignature(updated.signatureAttachment);
+    }
 
     onUpdatePoSellerConfig({
       ...poSellerConfig,
@@ -1199,6 +1257,102 @@ export const OilCostProView: React.FC<OilCostProViewProps> = ({
     );
   };
 
+  // Listen for mobile phone signatures in real-time for active invoice
+  useEffect(() => {
+    try {
+      const stored = localStorage.getItem(`gfi_sig_${invNum}`);
+      if (stored) {
+        const parsed = JSON.parse(stored);
+        if (parsed?.dataUrl) setPiSignature(parsed);
+      }
+    } catch {}
+
+    let channel: BroadcastChannel | null = null;
+    try {
+      channel = new BroadcastChannel('gfi_proforma_signatures');
+      channel.onmessage = event => {
+        if (event.data?.piNumber === invNum && event.data?.signature) {
+          setPiSignature(event.data.signature);
+          SoundEngine.play('success');
+          onNotify(`Real-time mobile signature verified and attached to ${invNum}`);
+        }
+      };
+    } catch {}
+
+    const onStorage = (e: StorageEvent) => {
+      if (e.key === `gfi_sig_${invNum}` && e.newValue) {
+        try {
+          const parsed = JSON.parse(e.newValue);
+          if (parsed?.dataUrl) {
+            setPiSignature(parsed);
+            SoundEngine.play('success');
+            onNotify(`Real-time mobile signature verified and attached to ${invNum}`);
+          }
+        } catch {}
+      }
+    };
+    window.addEventListener('storage', onStorage);
+
+    return () => {
+      channel?.close();
+      window.removeEventListener('storage', onStorage);
+    };
+  }, [invNum]);
+
+  // Global Proforma Markup (%) Scaler:
+  // When user increases/decreases %, ALL line item prices increase/scale in real time
+  const handleAdjustProformaPercentage = (newMarginPct: number) => {
+    const cleanMargin = Math.max(0, parseFloat(newMarginPct.toFixed(2)));
+    updateParams(prev => ({ ...prev, profitMargin: cleanMargin }));
+
+    setInvoiceItems(prev =>
+      prev.map(item => {
+        const oilSpecs = packingData[item.oilKey] || [];
+        const matchedSpec =
+          oilSpecs.find(s => s.id === item.skuId) ||
+          oilSpecs.find(s => s.sku.toLowerCase() === (item.sku || '').toLowerCase());
+
+        let newUnitPrice: number;
+        let baseCost: number;
+
+        if (matchedSpec) {
+          const rawPrice = oilPrices[item.oilKey] ?? commodities[item.oilKey]?.defaultPrice ?? 0;
+          const recomputed = calculateMasterRow(
+            matchedSpec,
+            rawPrice,
+            item.oilKey,
+            { ...params, profitMargin: cleanMargin },
+            commodities
+          );
+          newUnitPrice = recomputed.roundedQuotePrice;
+          baseCost =
+            item.basePrice ??
+            calculateMasterRow(
+              matchedSpec,
+              rawPrice,
+              item.oilKey,
+              { ...params, profitMargin: 0 },
+              commodities
+            ).roundedQuotePrice;
+        } else {
+          const prevMargin = params.profitMargin || 10;
+          baseCost = item.basePrice ?? item.unitPrice / (1 + prevMargin / 100);
+          newUnitPrice = fmt(baseCost * (1 + cleanMargin / 100));
+        }
+
+        return {
+          ...item,
+          basePrice: baseCost,
+          unitPrice: newUnitPrice,
+          lineTotal: fmt(item.qty * newUnitPrice),
+        };
+      })
+    );
+
+    SoundEngine.play('pop');
+    onNotify(`Proforma profit margin set to ${cleanMargin}%. All line prices updated in real time.`);
+  };
+
   const handleDownloadCurrentXlsx = async (piToExport: SavedProformaInvoice = currentInvoiceSnapshot) => {
     if (!checkFloorComplianceBeforeIssuing(piToExport.items)) return;
     try {
@@ -1280,6 +1434,7 @@ export const OilCostProView: React.FC<OilCostProViewProps> = ({
     );
     setExtraSummaryRows(pi.extraSummaryRows || []);
     setPiInternalNote(pi.internalNote || '');
+    setPiSignature(pi.signatureAttachment);
     setSubTab('invoice');
     onNotify(`Loaded ${pi.piNumber} into Proforma Invoice editor.`);
   };
@@ -1480,6 +1635,86 @@ export const OilCostProView: React.FC<OilCostProViewProps> = ({
         </div>
 
         <fieldset disabled={!canEditMasterCosting} className="space-y-3 disabled:opacity-75">
+        {/* TOP SECTION: Country to be delivered to */}
+        <div className="p-3.5 rounded-xl border-2 border-slate-200 dark:border-slate-700 bg-gradient-to-r from-blue-50/70 via-indigo-50/40 to-slate-50 dark:from-slate-900 dark:via-blue-950/20 dark:to-slate-900 shadow-xs space-y-2.5">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="flex items-center gap-2.5">
+              <div className={`p-2 rounded-xl text-white shadow-sm transition-colors ${
+                params.isUSA ? 'bg-blue-600' : 'bg-emerald-600'
+              }`}>
+                <Globe className="w-5 h-5" />
+              </div>
+              <div>
+                <div className="flex items-center gap-2">
+                  <h4 className="text-xs font-black uppercase tracking-wider text-slate-900 dark:text-slate-100">
+                    Country to be Delivered to
+                  </h4>
+                  <span className={`px-2 py-0.5 rounded-full text-[10px] font-black uppercase tracking-tight border ${
+                    params.isUSA
+                      ? 'bg-blue-100 text-blue-800 dark:bg-blue-950 dark:text-blue-200 border-blue-300 dark:border-blue-700'
+                      : 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-200 border-emerald-300 dark:border-emerald-700'
+                  }`}>
+                    {params.isUSA ? '🇺🇸 USA Destination (Duties Active)' : '🌐 Non-USA Destination (No Duties Applicable)'}
+                  </span>
+                </div>
+                <p className="text-[11px] text-slate-600 dark:text-slate-400 mt-0.5">
+                  Select target delivery territory. If <strong>USA</strong> is selected, US Customs duties and tariffs apply. If <strong>any other country</strong> is selected, no duties are applicable.
+                </p>
+              </div>
+            </div>
+
+            {/* Country Selector Dropdown */}
+            <div className="flex items-center gap-2">
+              <select
+                value={params.deliveryCountry || (params.isUSA ? 'USA' : 'Canada')}
+                onChange={e => handleSelectDeliveryCountry(e.target.value)}
+                className="px-3 py-1.5 rounded-xl border-2 border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-800 font-bold text-xs shadow-xs focus:ring-2 focus:ring-blue-500 focus:outline-none cursor-pointer text-slate-900 dark:text-slate-100"
+              >
+                <option value="USA">🇺🇸 United States of America (USA)</option>
+                <option value="Canada">🇨🇦 Canada</option>
+                <option value="United Kingdom">🇬🇧 United Kingdom (UK)</option>
+                <option value="United Arab Emirates">🇦🇪 United Arab Emirates (UAE)</option>
+                <option value="Australia">🇦🇺 Australia</option>
+                <option value="Guyana">🇬🇾 Guyana</option>
+                <option value="Italy">🇮🇹 Italy / European Union</option>
+                <option value="Saudi Arabia">🇸🇦 Saudi Arabia</option>
+                <option value="Singapore">🇸🇬 Singapore</option>
+                <option value="Other">🌐 Other International Destination</option>
+              </select>
+
+              {params.deliveryCountry === 'Other' && (
+                <input
+                  type="text"
+                  placeholder="Enter country name"
+                  value={customCountryName}
+                  onChange={e => {
+                    setCustomCountryName(e.target.value);
+                    updateParams(prev => ({ ...prev, deliveryCountry: e.target.value || 'Other' }));
+                  }}
+                  className="px-2.5 py-1.5 text-xs rounded-xl border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-800 font-semibold text-slate-900 dark:text-slate-100"
+                />
+              )}
+            </div>
+          </div>
+
+          {/* Verification Status Banner */}
+          {!params.isUSA ? (
+            <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-300 dark:border-emerald-800 text-emerald-900 dark:text-emerald-200 text-xs font-semibold">
+              <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+              <span>
+                <strong>No Import Duties Applicable:</strong> Delivery destination is <strong>{params.deliveryCountry || 'International'}</strong>. All US Customs duties, Trump reciprocal tariffs (Section 301), and merchandise processing fees are exempt (0.00% applied).
+              </span>
+            </div>
+          ) : (
+            <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-blue-50 dark:bg-blue-950/40 border border-blue-200 dark:border-blue-800 text-blue-900 dark:text-blue-200 text-xs font-semibold">
+              <ShieldCheck className="w-4 h-4 text-blue-600 shrink-0" />
+              <span>
+                <strong>USA Customs Duties Applicable:</strong> Delivery destination is <strong>United States</strong>. US Basic Customs Duty, Per-Kg Duty, Section 301 Reciprocal Tariffs, and Merchandise Processing Entry Fees are applied in the duties section below.
+              </span>
+            </div>
+          )}
+        </div>
+
         {/* Row 1: Primary Commercial Controls */}
         <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-3 text-xs">
           <div>
@@ -1627,9 +1862,9 @@ export const OilCostProView: React.FC<OilCostProViewProps> = ({
           </div>
         </div>
 
-        {/* Row 2: All Freight, Customs Duties, Container Size, Density & Rounding */}
+        {/* Row 2: Freight, Container Size, Density & Rounding */}
         {showAdvancedParams && (
-          <div className="grid grid-cols-2 sm:grid-cols-5 lg:grid-cols-10 gap-3 pt-3 border-t border-slate-100 dark:border-slate-800 text-xs">
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 pt-3 border-t border-slate-100 dark:border-slate-800 text-xs">
             <div>
               <label className="block text-[10.5px] font-semibold text-slate-500 dark:text-slate-400 mb-1">
                 Ocean Freight ($/Ctnr)
@@ -1665,109 +1900,6 @@ export const OilCostProView: React.FC<OilCostProViewProps> = ({
                 step="1000"
                 value={params.domesticFreight}
                 onChange={e => updateParams(p => ({ ...p, domesticFreight: parseFloat(e.target.value) || 0 }))}
-                className="w-full px-2.5 py-1.5 rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 font-mono font-bold tabular-nums"
-              />
-            </div>
-
-            <div>
-              <label className="block text-[10.5px] font-semibold text-slate-500 dark:text-slate-400 mb-1">
-                Basic Customs Duty
-              </label>
-              <div className="flex gap-1">
-                <input
-                  type="number"
-                  step="0.1"
-                  value={params.basicDuty}
-                  onChange={e => updateParams(p => ({ ...p, basicDuty: parseFloat(e.target.value) || 0 }))}
-                  className="w-3/5 px-2 py-1.5 rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 font-mono font-bold tabular-nums"
-                />
-                <select
-                  value={params.dutyType}
-                  onChange={e => updateParams(p => ({ ...p, dutyType: e.target.value as DutyBasisType }))}
-                  className="w-2/5 px-1 py-1.5 rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 font-bold text-[10.5px]"
-                >
-                  <option value="%">%</option>
-                  <option value="$/kg">$/kg</option>
-                  <option value="cents/kg">¢/kg</option>
-                </select>
-              </div>
-            </div>
-
-            <div>
-              <label
-                className="block text-[10.5px] font-semibold text-amber-700 dark:text-amber-400 mb-1 truncate"
-                title="Second Basic Customs Duty option charged per kilogram of net product weight"
-              >
-                Basic Duty 2 (Per Kg)
-              </label>
-              <div className="flex gap-1">
-                <input
-                  type="number"
-                  step="0.01"
-                  min={0}
-                  value={params.basicDutyPerKg ?? 0}
-                  onChange={e =>
-                    updateParams(p => ({
-                      ...p,
-                      basicDutyPerKg: Math.max(0, parseFloat(e.target.value) || 0),
-                    }))
-                  }
-                  placeholder="0.00"
-                  className="w-3/5 px-2 py-1.5 rounded-lg border border-amber-300 dark:border-amber-700/70 bg-amber-50/40 dark:bg-amber-950/20 font-mono font-bold tabular-nums"
-                />
-                <select
-                  value={params.basicDutyPerKgUnit || '$/kg'}
-                  onChange={e =>
-                    updateParams(p => ({
-                      ...p,
-                      basicDutyPerKgUnit: e.target.value as PerKgDutyUnit,
-                    }))
-                  }
-                  className="w-2/5 px-1 py-1.5 rounded-lg border border-amber-300 dark:border-amber-700/70 bg-amber-50/40 dark:bg-amber-950/20 font-bold text-[10.5px]"
-                >
-                  <option value="$/kg">$/kg</option>
-                  <option value="cents/kg">¢/kg</option>
-                </select>
-              </div>
-            </div>
-
-            <div>
-              <label className="block text-[10.5px] font-semibold text-slate-500 dark:text-slate-400 mb-1">
-                Reciprocal Tariff %
-              </label>
-              <div className="flex items-center gap-1.5">
-                <input
-                  type="checkbox"
-                  checked={params.isUSA}
-                  onChange={e => updateParams(p => ({ ...p, isUSA: e.target.checked }))}
-                  className="accent-amber-600 w-3.5 h-3.5 shrink-0"
-                  title="Apply US Reciprocal Tariff"
-                />
-                <input
-                  type="number"
-                  step="0.5"
-                  disabled={!params.isUSA}
-                  value={params.reciprocalDuty}
-                  onChange={e => updateParams(p => ({ ...p, reciprocalDuty: parseFloat(e.target.value) || 0 }))}
-                  className="w-full px-2 py-1.5 rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 font-mono font-bold tabular-nums disabled:opacity-50"
-                />
-              </div>
-            </div>
-
-            <div>
-              <label className="block text-[10.5px] font-semibold text-slate-500 dark:text-slate-400 mb-1">
-                Entry Fee (% FOB)
-              </label>
-              <input
-                type="number"
-                step="0.0005"
-                value={Number((params.entryFeePercent * 100).toFixed(4))}
-                onChange={e =>
-                  updateParams(p => ({
-                    ...p,
-                    entryFeePercent: (parseFloat(e.target.value) || 0) / 100,
-                  }))
-                }
                 className="w-full px-2.5 py-1.5 rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 font-mono font-bold tabular-nums"
               />
             </div>
@@ -1821,6 +1953,120 @@ export const OilCostProView: React.FC<OilCostProViewProps> = ({
                 <option value="0.5">Up to 0.50</option>
                 <option value="1">Up to 1.00</option>
               </select>
+            </div>
+          </div>
+        )}
+
+        {/* US CUSTOMS DUTIES & TARIFFS SECTION — ONLY SHOWN IF DESTINATION COUNTRY IS USA */}
+        {showAdvancedParams && params.isUSA && (
+          <div className="p-3.5 rounded-xl border-2 border-blue-200 dark:border-blue-900/60 bg-blue-50/40 dark:bg-blue-950/30 space-y-2.5">
+            <div className="flex flex-wrap items-center justify-between border-b border-blue-200/80 dark:border-blue-900/40 pb-2">
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-black uppercase text-blue-900 dark:text-blue-200 tracking-wide">
+                  🇺🇸 US Import Customs Duties &amp; Tariffs
+                </span>
+                <span className="px-2 py-0.5 rounded text-[10px] font-black bg-blue-600 text-white shadow-2xs">
+                  Active for USA Delivery
+                </span>
+              </div>
+              <span className="text-[10.5px] text-slate-500 dark:text-slate-400">
+                Applied to US Landed Costing &amp; DDP pricing
+              </span>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 text-xs">
+              <div>
+                <label className="block text-[10.5px] font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                  US Basic Customs Duty
+                </label>
+                <div className="flex gap-1">
+                  <input
+                    type="number"
+                    step="0.1"
+                    value={params.basicDuty}
+                    onChange={e => updateParams(p => ({ ...p, basicDuty: parseFloat(e.target.value) || 0 }))}
+                    className="w-3/5 px-2 py-1.5 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 font-mono font-bold tabular-nums text-xs"
+                  />
+                  <select
+                    value={params.dutyType}
+                    onChange={e => updateParams(p => ({ ...p, dutyType: e.target.value as DutyBasisType }))}
+                    className="w-2/5 px-1 py-1.5 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 font-bold text-[10.5px]"
+                  >
+                    <option value="%">%</option>
+                    <option value="$/kg">$/kg</option>
+                    <option value="cents/kg">¢/kg</option>
+                  </select>
+                </div>
+              </div>
+
+              <div>
+                <label
+                  className="block text-[10.5px] font-semibold text-amber-700 dark:text-amber-400 mb-1 truncate"
+                  title="Second Basic Customs Duty option charged per kilogram of net product weight"
+                >
+                  US Basic Duty 2 (Per Kg)
+                </label>
+                <div className="flex gap-1">
+                  <input
+                    type="number"
+                    step="0.01"
+                    min={0}
+                    value={params.basicDutyPerKg ?? 0}
+                    onChange={e =>
+                      updateParams(p => ({
+                        ...p,
+                        basicDutyPerKg: Math.max(0, parseFloat(e.target.value) || 0),
+                      }))
+                    }
+                    placeholder="0.00"
+                    className="w-3/5 px-2 py-1.5 rounded-lg border border-amber-300 dark:border-amber-700/70 bg-white dark:bg-slate-800 font-mono font-bold tabular-nums text-xs"
+                  />
+                  <select
+                    value={params.basicDutyPerKgUnit || '$/kg'}
+                    onChange={e =>
+                      updateParams(p => ({
+                        ...p,
+                        basicDutyPerKgUnit: e.target.value as PerKgDutyUnit,
+                      }))
+                    }
+                    className="w-2/5 px-1 py-1.5 rounded-lg border border-amber-300 dark:border-amber-700/70 bg-white dark:bg-slate-800 font-bold text-[10.5px]"
+                  >
+                    <option value="$/kg">$/kg</option>
+                    <option value="cents/kg">¢/kg</option>
+                  </select>
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-[10.5px] font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                  US Reciprocal Tariff % (Sec 301)
+                </label>
+                <input
+                  type="number"
+                  step="0.5"
+                  value={params.reciprocalDuty}
+                  onChange={e => updateParams(p => ({ ...p, reciprocalDuty: parseFloat(e.target.value) || 0 }))}
+                  className="w-full px-2 py-1.5 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 font-mono font-bold tabular-nums text-xs"
+                />
+              </div>
+
+              <div>
+                <label className="block text-[10.5px] font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                  Customs Entry Fee (% FOB)
+                </label>
+                <input
+                  type="number"
+                  step="0.0005"
+                  value={Number((params.entryFeePercent * 100).toFixed(4))}
+                  onChange={e =>
+                    updateParams(p => ({
+                      ...p,
+                      entryFeePercent: (parseFloat(e.target.value) || 0) / 100,
+                    }))
+                  }
+                  className="w-full px-2.5 py-1.5 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 font-mono font-bold tabular-nums text-xs"
+                />
+              </div>
             </div>
           </div>
         )}
@@ -3701,6 +3947,147 @@ export const OilCostProView: React.FC<OilCostProViewProps> = ({
               </div>
             </div>
           </fieldset>
+
+          {/* Global Proforma Markup (%) Scaler: Real-time price multiplier across all line items */}
+          <div className="p-4 rounded-xl border-2 border-amber-500/40 bg-gradient-to-r from-amber-500/10 via-amber-50/50 to-orange-50/40 dark:from-amber-950/40 dark:via-slate-900 dark:to-amber-950/20 shadow-sm space-y-3">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div className="flex items-center gap-2.5">
+                <div className="p-2 rounded-lg bg-amber-500 text-white shadow-sm">
+                  <TrendingUp className="w-5 h-5" />
+                </div>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <h3 className="text-sm font-black text-slate-900 dark:text-slate-100 uppercase tracking-tight">
+                      Proforma Pricing % Markup Scaler
+                    </h3>
+                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-black bg-amber-100 dark:bg-amber-900/60 text-amber-800 dark:text-amber-200 border border-amber-300 dark:border-amber-700">
+                      <Percent className="w-3 h-3" />
+                      LIVE ALL-PRICES MULTIPLIER
+                    </span>
+                  </div>
+                  <p className="text-xs text-slate-600 dark:text-slate-400 mt-0.5">
+                    When you increase or decrease the percentage below, <strong className="text-amber-700 dark:text-amber-300">all {invoiceItems.length} line item prices, subtotal, and total amount scale in real time</strong>.
+                  </p>
+                </div>
+              </div>
+
+              {/* Total live summary preview */}
+              <div className="flex items-center gap-4 bg-white/80 dark:bg-slate-800/80 px-3.5 py-1.5 rounded-lg border border-amber-200 dark:border-amber-900/50 text-right">
+                <div>
+                  <div className="text-[10px] font-bold uppercase text-slate-400">Total Proforma USD</div>
+                  <div className="text-sm font-black tabular-nums text-slate-900 dark:text-slate-100">
+                    {params.curSymbol}{fmtStr(invoiceTotals.grandTotal)}
+                  </div>
+                </div>
+                <div className="border-l border-slate-200 dark:border-slate-700 pl-3">
+                  <div className="text-[10px] font-bold uppercase text-slate-400">Total INR</div>
+                  <div className="text-sm font-black tabular-nums text-emerald-600 dark:text-emerald-400">
+                    ₹{fmtStr(invoiceTotals.grandTotal * params.activeExRate)}
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Stepper & input controls */}
+            <div className="flex flex-wrap items-center justify-between gap-3 pt-1 border-t border-amber-200/60 dark:border-amber-900/40">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="text-xs font-bold text-slate-700 dark:text-slate-300">
+                  Global Markup (%):
+                </span>
+
+                <div className="inline-flex items-center rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-800 p-0.5 shadow-xs">
+                  <button
+                    type="button"
+                    disabled={!canCreateEditPI || params.profitMargin <= 0}
+                    onClick={() => handleAdjustProformaPercentage(Math.max(0, params.profitMargin - 1))}
+                    className="px-2 py-1 text-xs font-bold rounded text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-700 disabled:opacity-40 cursor-pointer"
+                    title="Decrease 1%"
+                  >
+                    -1%
+                  </button>
+                  <div className="flex items-center px-2">
+                    <input
+                      type="number"
+                      step="0.5"
+                      min="0"
+                      max="100"
+                      disabled={!canCreateEditPI}
+                      value={params.profitMargin}
+                      onChange={e => {
+                        const val = parseFloat(e.target.value);
+                        if (!Number.isNaN(val)) handleAdjustProformaPercentage(val);
+                      }}
+                      className="w-16 text-center text-sm font-black font-mono tabular-nums text-amber-700 dark:text-amber-300 bg-transparent focus:outline-none"
+                    />
+                    <span className="text-xs font-black text-amber-700 dark:text-amber-300">%</span>
+                  </div>
+                  <button
+                    type="button"
+                    disabled={!canCreateEditPI}
+                    onClick={() => handleAdjustProformaPercentage(params.profitMargin + 1)}
+                    className="px-2 py-1 text-xs font-bold rounded bg-amber-500 hover:bg-amber-600 text-white shadow-xs cursor-pointer"
+                    title="Increase 1%"
+                  >
+                    +1%
+                  </button>
+                </div>
+
+                {/* Quick increase buttons */}
+                <div className="flex items-center gap-1.5 ml-2">
+                  <button
+                    type="button"
+                    disabled={!canCreateEditPI}
+                    onClick={() => handleAdjustProformaPercentage(params.profitMargin + 2)}
+                    className="px-2 py-1 text-xs font-bold rounded bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 hover:border-amber-500 text-slate-800 dark:text-slate-200 cursor-pointer"
+                  >
+                    +2%
+                  </button>
+                  <button
+                    type="button"
+                    disabled={!canCreateEditPI}
+                    onClick={() => handleAdjustProformaPercentage(params.profitMargin + 5)}
+                    className="px-2.5 py-1 text-xs font-bold rounded bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 hover:border-amber-500 text-slate-800 dark:text-slate-200 cursor-pointer"
+                  >
+                    +5%
+                  </button>
+                  <button
+                    type="button"
+                    disabled={!canCreateEditPI}
+                    onClick={() => handleAdjustProformaPercentage(params.profitMargin + 10)}
+                    className="px-2.5 py-1 text-xs font-black rounded bg-emerald-600 hover:bg-emerald-700 text-white shadow-xs cursor-pointer"
+                  >
+                    +10%
+                  </button>
+                </div>
+              </div>
+
+              {/* Standard presets */}
+              <div className="flex items-center gap-1.5 text-xs text-slate-500">
+                <span className="text-[11px] font-semibold text-slate-400">Presets:</span>
+                {[
+                  { label: '5% (Min)', val: 5 },
+                  { label: '10% (Std)', val: 10 },
+                  { label: '12% (Target)', val: 12 },
+                  { label: '15% (Export)', val: 15 },
+                  { label: '20% (Premium)', val: 20 },
+                ].map(p => (
+                  <button
+                    key={p.val}
+                    type="button"
+                    disabled={!canCreateEditPI}
+                    onClick={() => handleAdjustProformaPercentage(p.val)}
+                    className={`px-2 py-0.5 rounded text-[11px] font-semibold transition-colors cursor-pointer ${
+                      params.profitMargin === p.val
+                        ? 'bg-amber-500 text-white font-bold'
+                        : 'bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 hover:border-amber-400'
+                    }`}
+                  >
+                    {p.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
 
           {/* Editable Line Items Table */}
           <div className="border border-slate-200 dark:border-slate-800 rounded-xl overflow-hidden bg-white dark:bg-slate-900">

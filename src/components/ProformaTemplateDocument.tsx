@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { SavedProformaInvoice, ProformaItem, ProformaExtraRow } from '../types';
+import React, { useState, useEffect } from 'react';
+import { SavedProformaInvoice, ProformaItem, ProformaExtraRow, DigitalSignatureData } from '../types';
 import {
   DEFAULT_BANK_DETAILS_TEXT,
   DEFAULT_PO_SELLER_CONFIG,
@@ -8,7 +8,8 @@ import {
   formatPoProductDescription,
 } from '../utils/constants';
 import { fmt, fmtStr } from '../utils/calculations';
-import { Plus, Trash2 } from 'lucide-react';
+import { Plus, Trash2, Smartphone, CheckCircle2, ShieldCheck, QrCode, PenTool } from 'lucide-react';
+import QRCode from 'qrcode';
 
 interface ProformaTemplateDocumentProps {
   invoice: SavedProformaInvoice;
@@ -25,6 +26,7 @@ export const ProformaTemplateDocument: React.FC<ProformaTemplateDocumentProps> =
 }) => {
   const [logoErr, setLogoErr] = useState(false);
   const [stampErr, setStampErr] = useState(false);
+  const [qrCodeUrl, setQrCodeUrl] = useState<string>('');
 
   const curSymbol = invoice.curSymbol || '$';
   const documentTitle = invoice.documentTitle ?? DEFAULT_PO_SELLER_CONFIG.documentTitle;
@@ -137,6 +139,59 @@ export const ProformaTemplateDocument: React.FC<ProformaTemplateDocumentProps> =
     extraSummaryRows.length > 0
       ? fmt(computedSubTotal + computedExtrasTotal)
       : fmt(invoice.totalUSD ?? computedSubTotal);
+
+  const targetInvoiceNumber = invoice.piNumber || 'PI-1541';
+
+  // Generate Phone-Only Signing QR Code
+  useEffect(() => {
+    const origin = typeof window !== 'undefined' ? window.location.origin : '';
+    const mobileSignUrl = `${origin}/?signInvoice=${encodeURIComponent(targetInvoiceNumber)}&amount=${encodeURIComponent(computedGrandTotal)}&buyer=${encodeURIComponent(invoice.buyerName || 'Valued Client')}`;
+
+    QRCode.toDataURL(mobileSignUrl, {
+      width: 130,
+      margin: 1,
+      color: {
+        dark: '#003366',
+        light: '#ffffff',
+      },
+    })
+      .then(url => setQrCodeUrl(url))
+      .catch(err => console.warn('QR code gen error:', err));
+  }, [targetInvoiceNumber, computedGrandTotal, invoice.buyerName]);
+
+  // Real-time listener: When scanned and signed by phone, desktop automatically updates!
+  useEffect(() => {
+    let channel: BroadcastChannel | null = null;
+    try {
+      channel = new BroadcastChannel('gfi_proforma_signatures');
+      channel.onmessage = event => {
+        if (event.data?.piNumber === targetInvoiceNumber && event.data?.signature) {
+          onChange?.({
+            ...invoice,
+            signatureAttachment: event.data.signature,
+          });
+        }
+      };
+    } catch {}
+
+    const handleStorageEvent = (e: StorageEvent) => {
+      if (e.key === `gfi_sig_${targetInvoiceNumber}` && e.newValue) {
+        try {
+          const sig = JSON.parse(e.newValue);
+          onChange?.({
+            ...invoice,
+            signatureAttachment: sig,
+          });
+        } catch {}
+      }
+    };
+    window.addEventListener('storage', handleStorageEvent);
+
+    return () => {
+      channel?.close();
+      window.removeEventListener('storage', handleStorageEvent);
+    };
+  }, [targetInvoiceNumber, invoice, onChange]);
 
   const displayRowCount = Math.max(minRows, items.length);
   const blankRowIndices = Array.from(
@@ -692,33 +747,95 @@ export const ProformaTemplateDocument: React.FC<ProformaTemplateDocumentProps> =
           </div>
         </div>
 
-        {/* SECTION 4: STAMP & AUTHORIZED SIGNATORY (Rows 45..52, Right Aligned) */}
-        <div className="pt-4 pr-3 flex justify-end">
-          <div className="flex flex-col items-center text-center min-w-[200px]">
-            {showStamp && !stampErr ? (
-              <img
-                src={GLOBAL_FUTURA_STAMP_PATH}
-                alt="For Global Futura Inc Authorized Stamp & Signature"
-                referrerPolicy="no-referrer"
-                onError={() => setStampErr(true)}
-                className="h-[108px] w-auto object-contain select-none"
-              />
-            ) : (
-              <div className="h-[72px] flex items-end justify-center pb-2 text-xs font-bold text-[#003366]">
-                FOR GLOBAL FUTURA INC
-              </div>
-            )}
+        {/* SECTION 4: STAMP & AUTHORIZED SIGNATORY + PHONE-ONLY SIGNATURE QR (Rows 45..52, Right Aligned) */}
+        <div className="pt-4 pr-3 flex flex-wrap items-end justify-between gap-6 border-t border-slate-300 mt-2">
+          {/* Note regarding mobile signature */}
+          <div className="text-[10.5px] text-slate-500 max-w-xs space-y-1">
+            <div className="flex items-center gap-1.5 font-bold text-[#003366]">
+              <ShieldCheck className="w-4 h-4 text-[#003366]" />
+              <span>Commercial Authentication Protocol</span>
+            </div>
+            <p className="leading-snug">
+              Official Proforma Invoice of Global Futura Inc. Authorized digitally via executive touch signatory or corporate seal.
+            </p>
+          </div>
 
-            {editable ? (
-              <input
-                type="text"
-                value={signatoryLabel}
-                onChange={e => updateField('signatoryLabel', e.target.value)}
-                className="mt-1 text-center text-[13px] font-semibold text-black border-b border-dashed border-amber-400 bg-amber-50/40 focus:outline-none w-40"
-              />
-            ) : (
-              <div className="mt-1 text-[13px] font-medium text-black">{signatoryLabel}</div>
-            )}
+          <div className="flex flex-wrap items-end justify-end gap-5">
+            {/* Phone-Only Signing QR Code Block */}
+            <div className="flex flex-col items-center text-center border-2 border-[#003366]/40 rounded-xl p-2 bg-[#F8FAFC] shadow-xs max-w-[170px] select-none">
+              <div className="flex items-center gap-1 text-[9.5px] font-black uppercase text-[#003366] tracking-tight mb-1">
+                <Smartphone className="w-3.5 h-3.5 text-[#003366]" />
+                <span>SCAN BY PHONE TO SIGN</span>
+              </div>
+
+              {qrCodeUrl ? (
+                <div className="p-1 bg-white border border-slate-300 rounded shadow-xs">
+                  <img
+                    src={qrCodeUrl}
+                    alt="Scan with smartphone camera to sign"
+                    className="w-24 h-24 object-contain"
+                  />
+                </div>
+              ) : (
+                <div className="w-24 h-24 flex items-center justify-center text-[10px] text-slate-400 bg-white">
+                  Generating QR...
+                </div>
+              )}
+
+              <div className="mt-1 text-[8.5px] text-slate-600 font-semibold leading-tight text-center">
+                Point phone camera here to draw &amp; transmit signature
+              </div>
+            </div>
+
+            {/* Stamp & Authorized Signatory Block */}
+            <div className="flex flex-col items-center text-center min-w-[200px]">
+              {invoice.signatureAttachment?.dataUrl ? (
+                <div className="space-y-1 mb-1 flex flex-col items-center">
+                  <img
+                    src={invoice.signatureAttachment.dataUrl}
+                    alt="Executive Digital Signature"
+                    className="h-16 w-auto object-contain max-w-[210px]"
+                  />
+                  <div className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-emerald-100 text-emerald-800 text-[9.5px] font-bold">
+                    <CheckCircle2 className="w-3 h-3 text-emerald-600" />
+                    <span>Verified Phone Signature</span>
+                  </div>
+                  <div className="text-[9.5px] text-slate-600 font-mono">
+                    {invoice.signatureAttachment.signedAt}
+                  </div>
+                </div>
+              ) : showStamp && !stampErr ? (
+                <img
+                  src={GLOBAL_FUTURA_STAMP_PATH}
+                  alt="For Global Futura Inc Authorized Stamp & Signature"
+                  referrerPolicy="no-referrer"
+                  onError={() => setStampErr(true)}
+                  className="h-[108px] w-auto object-contain select-none"
+                />
+              ) : (
+                <div className="h-[72px] flex items-end justify-center pb-2 text-xs font-bold text-[#003366]">
+                  FOR GLOBAL FUTURA INC
+                </div>
+              )}
+
+              {editable ? (
+                <input
+                  type="text"
+                  value={signatoryLabel}
+                  onChange={e => updateField('signatoryLabel', e.target.value)}
+                  className="mt-1 text-center text-[13px] font-semibold text-black border-b border-dashed border-amber-400 bg-amber-50/40 focus:outline-none w-44"
+                />
+              ) : (
+                <div className="mt-1 text-[13px] font-medium text-black">
+                  {invoice.signatureAttachment?.signerName || signatoryLabel}
+                </div>
+              )}
+              {invoice.signatureAttachment?.signerTitle && (
+                <div className="text-[10px] text-slate-500 italic">
+                  {invoice.signatureAttachment.signerTitle}
+                </div>
+              )}
+            </div>
           </div>
         </div>
       </div>

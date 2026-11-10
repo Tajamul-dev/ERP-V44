@@ -189,6 +189,7 @@ export interface CommercialParams {
   density: number;
   incoterm: 'DDP' | 'CIF' | 'FOB' | 'EXW';
   isUSA: boolean;
+  deliveryCountry?: string;
   roundingStep: number;
   portName: string;
   containerSize: '40HQ' | '40GP' | '20GP';
@@ -277,6 +278,7 @@ export interface ProformaItem {
   units: number;
   qty: number; // Cartons / Cases
   unitPrice: number;
+  basePrice?: number;
   lineTotal: number;
   grossWeight: number;
   grossWeightLbs: number;
@@ -452,7 +454,7 @@ export interface DigitalSignatureData {
   signerTitle: string;
   signedAt: string;
   deviceToken: string;
-  verifiedHash: string;
+  verifiedHash?: string;
 }
 
 export interface PartyBomRequirement {

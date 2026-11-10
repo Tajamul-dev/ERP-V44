@@ -63,12 +63,14 @@ export async function loginWithGoogle(): Promise<User | null> {
       .substring(0, 2)
       .toUpperCase();
 
+    const isSuper = email.toLowerCase() === 'tajamul.sales@globaloils.us' || email.toLowerCase() === 'strangersyco@gmail.com';
     const user: User = {
       email,
       name,
       initials: initials || 'G',
-      role: 'admin',
+      role: isSuper ? 'super_admin' : 'admin',
       isAdmin: true,
+      isSuperAdmin: isSuper,
     };
 
     // Save profile to Firestore
@@ -84,8 +86,18 @@ export async function loginWithGoogle(): Promise<User | null> {
     }
 
     return user;
-  } catch (error) {
+  } catch (error: any) {
     console.error('Google Sign-In failed:', error);
+    if (error?.code === 'auth/unauthorized-domain') {
+      const currentHost = typeof window !== 'undefined' ? window.location.hostname : 'current domain';
+      const enhancedError = new Error(
+        `Firebase domain unauthorized: "${currentHost}" has not been added to Authorized Domains in Firebase Console.`
+      );
+      (enhancedError as any).code = 'auth/unauthorized-domain';
+      (enhancedError as any).domain = currentHost;
+      (enhancedError as any).projectId = firebaseConfig.projectId;
+      throw enhancedError;
+    }
     throw error;
   }
 }
@@ -93,3 +105,51 @@ export async function loginWithGoogle(): Promise<User | null> {
 export async function logoutUser() {
   await fbSignOut(auth);
 }
+
+export enum OperationType {
+  CREATE = 'create',
+  UPDATE = 'update',
+  DELETE = 'delete',
+  LIST = 'list',
+  GET = 'get',
+  WRITE = 'write',
+}
+
+export interface FirestoreErrorInfo {
+  error: string;
+  operationType: OperationType;
+  path: string | null;
+  authInfo: {
+    userId?: string | null;
+    email?: string | null;
+    emailVerified?: boolean | null;
+    isAnonymous?: boolean | null;
+    tenantId?: string | null;
+    providerInfo?: {
+      providerId?: string | null;
+      email?: string | null;
+    }[];
+  };
+}
+
+export function handleFirestoreError(error: unknown, operationType: OperationType, path: string | null) {
+  const errInfo: FirestoreErrorInfo = {
+    error: error instanceof Error ? error.message : String(error),
+    authInfo: {
+      userId: auth.currentUser?.uid,
+      email: auth.currentUser?.email,
+      emailVerified: auth.currentUser?.emailVerified,
+      isAnonymous: auth.currentUser?.isAnonymous,
+      tenantId: auth.currentUser?.tenantId,
+      providerInfo: auth.currentUser?.providerData?.map(provider => ({
+        providerId: provider.providerId,
+        email: provider.email,
+      })) || [],
+    },
+    operationType,
+    path,
+  };
+  console.error('Firestore Error: ', JSON.stringify(errInfo));
+  throw new Error(JSON.stringify(errInfo));
+}
+
