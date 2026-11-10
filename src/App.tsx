@@ -90,7 +90,15 @@ export default function App() {
   // Firebase user state
   const [isFirebaseUser, setIsFirebaseUser] = useState(false);
   const [authReady, setAuthReady] = useState(false);
-  const [isSignedIn, setIsSignedIn] = useState(false);
+  const [isSignedIn, setIsSignedIn] = useState<boolean>(() => {
+    try {
+      const saved = localStorage.getItem('futura_erp_signed_in');
+      return saved === 'true';
+    } catch {
+      return false;
+    }
+  });
+  const [emailInput, setEmailInput] = useState('strangersyco@gmail.com');
   const [authError, setAuthError] = useState<{ message: string; domain?: string; code?: string } | null>(null);
   const [copiedHost, setCopiedHost] = useState(false);
   const [toastMessage, setToastMessage] = useState<{ text: string; type: 'info' | 'success' | 'warn' } | null>(null);
@@ -117,8 +125,12 @@ export default function App() {
 
   // User state
   const [currentUser, setCurrentUser] = useState<User>(() => {
+    try {
+      const saved = localStorage.getItem('futura_erp_current_user');
+      if (saved) return JSON.parse(saved);
+    } catch {}
     return {
-      email: 'tajamul.sales@globaloils.us',
+      email: 'strangersyco@gmail.com',
       name: 'Tajamul Sales',
       initials: 'TS',
       role: 'super_admin',
@@ -141,16 +153,21 @@ export default function App() {
           .toUpperCase();
 
         const isSuper = email.toLowerCase() === 'tajamul.sales@globaloils.us' || email.toLowerCase() === 'strangersyco@gmail.com';
-        setCurrentUser({
+        const userObj: User = {
           email,
           name,
           initials: initials || 'G',
           role: isSuper ? 'super_admin' : 'admin',
           isAdmin: true,
           isSuperAdmin: isSuper,
-        });
+        };
+        setCurrentUser(userObj);
         setIsFirebaseUser(true);
         setIsSignedIn(true);
+        try {
+          localStorage.setItem('futura_erp_signed_in', 'true');
+          localStorage.setItem('futura_erp_current_user', JSON.stringify(userObj));
+        } catch {}
         setAuthReady(true);
         setAuthError(null);
         logActivity('system', 'Firebase Auth', `Signed in via Google Firebase as ${email}`);
@@ -193,11 +210,44 @@ export default function App() {
       SoundEngine.play('thud');
       showToast(
         isUnauthorizedDomain
-          ? 'Firebase domain authorization needed — use Enterprise Direct Access below'
+          ? 'Firebase domain unauthorized — enter email or select access role below'
           : (err.message || 'Sign in interrupted'),
         'warn'
       );
     }
+  };
+
+  // Enterprise Email Login
+  const handleEmailLogin = (overrideEmail?: string) => {
+    SoundEngine.play('pop');
+    setAuthError(null);
+    const targetEmail = (overrideEmail || emailInput).trim().toLowerCase();
+    if (!targetEmail) return;
+
+    const isSuper = targetEmail === 'tajamul.sales@globaloils.us' || targetEmail === 'strangersyco@gmail.com';
+    const namePart = targetEmail.split('@')[0];
+    const formattedName = namePart.charAt(0).toUpperCase() + namePart.slice(1);
+    const initials = namePart.substring(0, 2).toUpperCase();
+
+    const user: User = {
+      email: targetEmail,
+      name: isSuper ? 'Tajamul Sales' : formattedName,
+      initials: initials || 'U',
+      role: isSuper ? 'super_admin' : 'admin',
+      isAdmin: true,
+      isSuperAdmin: isSuper,
+    };
+
+    setCurrentUser(user);
+    setIsFirebaseUser(false);
+    setIsSignedIn(true);
+    try {
+      localStorage.setItem('futura_erp_signed_in', 'true');
+      localStorage.setItem('futura_erp_current_user', JSON.stringify(user));
+    } catch {}
+    SoundEngine.play('welcome');
+    showToast(`Signed in as ${user.email} (${user.role === 'super_admin' ? 'Super Admin' : 'Admin'})`, 'success');
+    logActivity('system', 'Direct Access', `Authenticated as ${user.name} (${user.email})`);
   };
 
   // Enterprise Dev & Demo Direct Login (prevents unauthorized-domain from blocking users)
@@ -207,7 +257,7 @@ export default function App() {
     let user: User;
     if (rolePreset === 'super_admin') {
       user = {
-        email: 'tajamul.sales@globaloils.us',
+        email: 'strangersyco@gmail.com',
         name: 'Tajamul Sales',
         initials: 'TS',
         role: 'super_admin',
@@ -242,6 +292,10 @@ export default function App() {
     setCurrentUser(user);
     setIsFirebaseUser(false);
     setIsSignedIn(true);
+    try {
+      localStorage.setItem('futura_erp_signed_in', 'true');
+      localStorage.setItem('futura_erp_current_user', JSON.stringify(user));
+    } catch {}
     SoundEngine.play('welcome');
     showToast(`Signed in as ${user.name} (${ROLE_LABELS[rolePreset] || rolePreset})`, 'success');
     logActivity('system', 'Direct Access', `Authenticated as ${user.name} (${user.email})`);
@@ -254,11 +308,15 @@ export default function App() {
     } catch (e) {
       console.warn('Logout error:', e);
     }
+    try {
+      localStorage.removeItem('futura_erp_signed_in');
+      localStorage.removeItem('futura_erp_current_user');
+    } catch {}
     setIsFirebaseUser(false);
     setIsSignedIn(false);
     setAuthError(null);
     setCurrentUser({
-      email: 'tajamul.sales@globaloils.us',
+      email: 'strangersyco@gmail.com',
       name: 'Tajamul Sales',
       initials: 'TS',
       role: 'super_admin',
@@ -1010,43 +1068,55 @@ export default function App() {
                   </div>
                 </div>
 
-                {isDomainError && currentHostname && (
-                  <div className="bg-slate-950/70 rounded-xl p-2.5 border border-amber-500/20 space-y-2">
-                    <div className="flex items-center justify-between gap-2">
-                      <span className="text-[11px] font-mono text-slate-300 truncate">
-                        {currentHostname}
-                      </span>
-                      <button
-                        type="button"
-                        onClick={handleCopyDomain}
-                        className="flex items-center gap-1 text-[11px] font-bold text-amber-400 hover:text-amber-300 bg-amber-500/20 hover:bg-amber-500/30 px-2 py-1 rounded-lg transition-colors cursor-pointer shrink-0"
-                      >
-                        {copiedHost ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3" />}
-                        <span>{copiedHost ? 'Copied' : 'Copy Domain'}</span>
-                      </button>
-                    </div>
-                    <div className="flex items-center justify-between text-[10px] text-slate-400 pt-1 border-t border-slate-800">
-                      <span>Firebase Console → Auth → Settings → Authorized domains</span>
-                      <a
-                        href="https://console.firebase.google.com/project/gen-lang-client-0142280869/authentication/settings"
-                        target="_blank"
-                        rel="noreferrer"
-                        className="text-amber-400 hover:underline flex items-center gap-0.5"
-                      >
-                        <span>Open Console</span>
-                        <ExternalLink className="w-2.5 h-2.5" />
-                      </a>
-                    </div>
+                {isDomainError && (
+                  <div className="space-y-2">
+                    <button
+                      type="button"
+                      onClick={() => handleEmailLogin('strangersyco@gmail.com')}
+                      className="w-full flex items-center justify-center gap-2 px-3 py-2.5 rounded-xl bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-slate-950 font-bold text-xs transition-colors cursor-pointer shadow-md"
+                    >
+                      <LogIn className="w-3.5 h-3.5" />
+                      <span>Continue to ERP as strangersyco@gmail.com (Super Admin)</span>
+                    </button>
+                    {currentHostname && (
+                      <div className="bg-slate-950/70 rounded-xl p-2.5 border border-amber-500/20 space-y-2">
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="text-[11px] font-mono text-slate-300 truncate">
+                            {currentHostname}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={handleCopyDomain}
+                            className="flex items-center gap-1 text-[11px] font-bold text-amber-400 hover:text-amber-300 bg-amber-500/20 hover:bg-amber-500/30 px-2 py-1 rounded-lg transition-colors cursor-pointer shrink-0"
+                          >
+                            {copiedHost ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3" />}
+                            <span>{copiedHost ? 'Copied' : 'Copy Domain'}</span>
+                          </button>
+                        </div>
+                        <div className="flex items-center justify-between text-[10px] text-slate-400 pt-1 border-t border-slate-800">
+                          <span>Firebase Console → Auth → Settings → Authorized domains</span>
+                          <a
+                            href="https://console.firebase.google.com/project/gen-lang-client-0142280869/authentication/settings"
+                            target="_blank"
+                            rel="noreferrer"
+                            className="text-amber-400 hover:underline flex items-center gap-0.5"
+                          >
+                            <span>Open Console</span>
+                            <ExternalLink className="w-2.5 h-2.5" />
+                          </a>
+                        </div>
+                      </div>
+                    )}
                   </div>
                 )}
 
                 <div className="text-[11px] text-amber-300/80 font-medium bg-amber-500/10 p-2 rounded-lg">
-                  💡 <strong>No wait required:</strong> Click <em>Continue as Tajamul Sales</em> below for immediate enterprise access.
+                  💡 <strong>Google Authentication:</strong> Sign in with your enterprise Google account below, or use direct email access.
                 </div>
               </div>
             )}
 
-            {/* Primary Action 1: Google Sign In */}
+            {/* Primary Action: Google Sign In */}
             <button
               onClick={handleGoogleLogin}
               className="w-full flex items-center justify-center gap-3 px-4 py-3.5 rounded-xl bg-white text-slate-900 font-bold text-sm hover:bg-slate-100 transition-all active:scale-95 shadow-lg cursor-pointer"
@@ -1060,33 +1130,36 @@ export default function App() {
               Sign in with Google Account
             </button>
 
-            {/* Divider */}
-            <div className="w-full flex items-center gap-3 text-xs text-slate-500 my-1">
-              <div className="h-px bg-slate-800 flex-1" />
-              <span>OR ENTERPRISE DIRECT ACCESS</span>
-              <div className="h-px bg-slate-800 flex-1" />
+            {/* Direct Email Access Form */}
+            <div className="w-full space-y-2 pt-2 border-t border-slate-800/60">
+              <form
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  handleEmailLogin();
+                }}
+                className="space-y-2"
+              >
+                <div className="flex items-center justify-between text-[11px] font-semibold text-slate-400 text-left">
+                  <span>Sign in with Enterprise Email:</span>
+                  <span className="text-[10px] text-amber-400 font-mono">Instant Access</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="email"
+                    value={emailInput}
+                    onChange={(e) => setEmailInput(e.target.value)}
+                    placeholder="Enter email (e.g. strangersyco@gmail.com)"
+                    className="flex-1 bg-slate-950/80 border border-slate-700 focus:border-amber-500 rounded-xl px-3 py-2 text-xs text-white placeholder-slate-500 outline-none transition-colors"
+                  />
+                  <button
+                    type="submit"
+                    className="px-4 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs transition-all active:scale-95 cursor-pointer shrink-0"
+                  >
+                    Enter ERP
+                  </button>
+                </div>
+              </form>
             </div>
-
-            {/* Primary Action 2: Direct Super Admin Access */}
-            <button
-              onClick={() => handleQuickLogin('super_admin')}
-              className="w-full flex items-center justify-between px-4 py-3 rounded-xl bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-slate-950 font-bold text-sm transition-all shadow-lg shadow-amber-500/10 cursor-pointer group active:scale-95"
-            >
-              <div className="flex items-center gap-2.5 text-left">
-                <div className="w-8 h-8 rounded-lg bg-slate-950/20 flex items-center justify-center">
-                  <ShieldCheck className="w-5 h-5 text-slate-950" />
-                </div>
-                <div>
-                  <div className="text-xs font-black uppercase tracking-wider text-slate-950/70">
-                    Executive Profile
-                  </div>
-                  <div className="text-sm font-black">Continue as Tajamul Sales</div>
-                </div>
-              </div>
-              <span className="px-2 py-0.5 rounded-md bg-slate-950 text-amber-400 text-[10px] font-black uppercase tracking-wider">
-                Super Admin
-              </span>
-            </button>
 
             {/* Staff Role Presets for RBAC Testing */}
             <div className="w-full space-y-2 pt-2 border-t border-slate-800/60">

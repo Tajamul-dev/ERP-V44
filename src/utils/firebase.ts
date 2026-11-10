@@ -6,7 +6,7 @@ import {
   signOut as fbSignOut,
   onAuthStateChanged,
   setPersistence,
-  inMemoryPersistence,
+  browserLocalPersistence,
   User as FirebaseUser,
 } from 'firebase/auth';
 import {
@@ -27,9 +27,8 @@ const app = initializeApp(firebaseConfig);
 // CRITICAL: Initialize Firestore with firestoreDatabaseId from config
 export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
 export const auth = getAuth(app);
-// Require a fresh login every time: keep auth state in memory only,
-// so nothing is persisted across page reloads or browser sessions.
-setPersistence(auth, inMemoryPersistence).catch((e: unknown) =>
+// Set browser local persistence so users stay logged in across reloads
+setPersistence(auth, browserLocalPersistence).catch((e: unknown) =>
   console.warn('Could not set auth persistence:', e)
 );
 export const googleProvider = new GoogleAuthProvider();
@@ -87,8 +86,8 @@ export async function loginWithGoogle(): Promise<User | null> {
 
     return user;
   } catch (error: any) {
-    console.error('Google Sign-In failed:', error);
     if (error?.code === 'auth/unauthorized-domain') {
+      console.warn('Google Sign-In notice: current domain is not yet authorized in Firebase Console.');
       const currentHost = typeof window !== 'undefined' ? window.location.hostname : 'current domain';
       const enhancedError = new Error(
         `Firebase domain unauthorized: "${currentHost}" has not been added to Authorized Domains in Firebase Console.`
@@ -98,6 +97,7 @@ export async function loginWithGoogle(): Promise<User | null> {
       (enhancedError as any).projectId = firebaseConfig.projectId;
       throw enhancedError;
     }
+    console.warn('Google Sign-In was cancelled or failed:', error?.message || error);
     throw error;
   }
 }
